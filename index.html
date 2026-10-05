@@ -5,44 +5,91 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>무한매수V4</title>
   <style>
-    /* 기본 스타일링 */
-    body { font-family: sans-serif; padding: 20px; background-color: #f4f6f9; }
-    .card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 15px; }
-    .btn-price-status { cursor: pointer; padding: 2px 8px; border-radius: 4px; border: 1px solid #ccc; background: #fff; }
-    .btn-price-status:hover { background: #e0e0e0; }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px; background-color: #f4f6f9; color: #333; }
+    .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 20px; border: 1px solid #e1e8ed; }
+    .header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+    .title { font-size: 1.2rem; font-weight: bold; margin: 0; }
+    
+    /* 현재가 및 버튼 스타일 */
+    .price-container { display: flex; align-items: center; gap: 8px; font-size: 1rem; }
+    .price-val { font-size: 1.3rem; font-weight: bold; color: #000; }
+    
+    .btn-price-status { 
+      cursor: pointer; 
+      padding: 4px 10px; 
+      border-radius: 6px; 
+      border: 1px solid #0066ff; 
+      background: #0066ff; 
+      color: white; 
+      font-size: 0.85rem; 
+      font-weight: 600;
+      transition: all 0.2s ease;
+    }
+    .btn-price-status:hover { background: #0052cc; }
+    .btn-price-status:disabled { background: #a0c4ff; border-color: #a0c4ff; cursor: not-allowed; }
+
+    /* 토글 스위치/자동갱신 안내 */
+    .auto-badge { font-size: 0.75rem; color: #28a745; background: #e8f5e9; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+    
+    /* 정보 그리드 */
+    .info-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 15px; text-align: center; }
+    .info-box { background: #f8f9fa; padding: 12px; border-radius: 8px; }
+    .info-label { font-size: 0.8rem; color: #666; margin-bottom: 4px; }
+    .info-value { font-size: 1rem; font-weight: bold; }
   </style>
 </head>
 <body>
 
-  <!-- 진행현황 영역 -->
+  <!-- 진행현황 카드로 레이아웃 구성 -->
   <div class="card">
-    <h3>진행현황</h3>
-    <div>
-      현재가: <strong id="current-price">0.00</strong>
-      <button id="price-source-btn" class="btn-price-status" onclick="fetchPrice(true)">[갱신]</button>
+    <div class="header-row">
+      <h2 class="title">진행현황</h2>
+      <div class="price-container">
+        <span>현재가: <strong id="current-price" class="price-val">0.00</strong></span>
+        <button id="price-source-btn" class="btn-price-status" onclick="manualFetchPrice()">[갱신]</button>
+        <span class="auto-badge" id="auto-status">1초 자동갱신 중</span>
+      </div>
     </div>
-    <div style="margin-top: 10px;">
-      <p>보유수량: <span id="hold-qty">0</span> 주</p>
-      <p>매수금액: <span id="buy-amount">0.00</span></p>
-      <p>평가금액: <span id="eval-amount">0.00</span> (<span id="return-rate">0.00%</span>)</p>
+
+    <div class="info-grid">
+      <div class="info-box">
+        <div class="info-label">보유수량</div>
+        <div class="info-value"><span id="hold-qty">0</span> 주</div>
+      </div>
+      <div class="info-box">
+        <div class="info-label">매수금액</div>
+        <div class="info-value"><span id="buy-amount">0.00</span></div>
+      </div>
+      <div class="info-box">
+        <div class="info-label">평가금액</div>
+        <div class="info-value">
+          <span id="eval-amount">0.00</span><br>
+          <small id="return-rate" style="font-size: 0.8rem; color: #888;">(0.00%)</small>
+        </div>
+      </div>
     </div>
   </div>
 
   <script>
-    // 현재가를 가져오는 종목 티커 (기본값: SOXL, 필요시 변경)
-    const SYMBOL = "SOXL";
+    // ----------------------------------------------------
+    // 설정 값
+    // ----------------------------------------------------
+    const SYMBOL = "SOXL";            // 현재가 조회 티커 (필요 시 원하는 티커로 변경)
+    const REFRESH_INTERVAL = 1000;    // 자동 갱신 주기 (1000ms = 1초)
+    let isFetching = false;           // 중복 요청 방지 플래그
+    let timerId = null;
 
-    /**
-     * 야후 파이낸스 API + CORS 프록시를 이용한 현재가 조회 함수
-     * @param {boolean} isManual 버튼 직접 클릭 여부
-     */
-    async function fetchPrice(isManual = false) {
-      const priceBtn = document.getElementById("price-source-btn");
-      if (priceBtn) priceBtn.innerText = "[조회중...]";
+    // ----------------------------------------------------
+    // 현재가 데이터 패치 함수 (CORS 우회 적용)
+    // ----------------------------------------------------
+    async function fetchPrice() {
+      // 이전 요청이 아직 진행 중이면 중복 요청 방지
+      if (isFetching) return;
+      isFetching = true;
 
-      // 야후 파이낸스 API URL 및 CORS 프록시 서비스 URL 설정
       const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${SYMBOL}?interval=1m&range=1d`;
-      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`;
+      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}&timestamp=${Date.now()}`; // 캐시 방지용 timestamp 추가
 
       try {
         const response = await fetch(proxyUrl);
@@ -51,34 +98,40 @@
         const data = await response.json();
         const parsedData = JSON.parse(data.contents);
 
-        // API 응답 데이터에서 현재가(또는 종가) 추출
         const result = parsedData.chart.result[0];
         const currentPrice = result.meta.regularMarketPrice || result.meta.chartPreviousClose;
 
         if (currentPrice) {
-          // 1. 현재가 화면에 표시
+          // 1. 화면에 현재가 반영
           document.getElementById("current-price").innerText = currentPrice.toFixed(2);
 
-          // 2. 보유수량이 있는 경우 평가금액 및 수익률 재계산 (예시)
+          // 2. 보유수량에 따른 평가금액 및 수익률 재계산
           updateCalculations(currentPrice);
-
-          if (isManual) {
-            alert(`현재가가 성공적으로 갱신되었습니다: $${currentPrice.toFixed(2)}`);
-          }
-        } else {
-          throw new Error("가격 데이터를 찾을 수 없습니다.");
         }
       } catch (error) {
-        console.error("현재가 갱신 실패:", error);
-        alert("현재가를 불러오는 중 오류가 발생했습니다. 브라우저 콘솔(F12)을 확인해 주세요.");
+        console.error("1초 단위 자동 갱신 중 오류 발생:", error);
       } finally {
-        if (priceBtn) priceBtn.innerText = "[갱신]";
+        isFetching = false;
       }
     }
 
-    /**
-     * 현재가 변경에 따른 평가금액 및 수익률 계산 함수
-     */
+    // ----------------------------------------------------
+    // 수동 [갱신] 버튼 클릭 시 동작 함수
+    // ----------------------------------------------------
+    async function manualFetchPrice() {
+      const priceBtn = document.getElementById("price-source-btn");
+      priceBtn.innerText = "[조회중...]";
+      priceBtn.disabled = true;
+
+      await fetchPrice();
+
+      priceBtn.innerText = "[갱신]";
+      priceBtn.disabled = false;
+    }
+
+    // ----------------------------------------------------
+    // 현재가 기반 평가금액 및 수익률 계산 로직
+    // ----------------------------------------------------
     function updateCalculations(price) {
       const holdQty = parseFloat(document.getElementById("hold-qty").innerText) || 0;
       const buyAmount = parseFloat(document.getElementById("buy-amount").innerText) || 0;
@@ -86,15 +139,26 @@
       const evalAmount = holdQty * price;
       document.getElementById("eval-amount").innerText = evalAmount.toFixed(2);
 
+      const returnRateEl = document.getElementById("return-rate");
       if (buyAmount > 0) {
         const returnRate = ((evalAmount - buyAmount) / buyAmount) * 100;
-        document.getElementById("return-rate").innerText = `${returnRate.toFixed(2)}%`;
+        returnRateEl.innerText = `(${returnRate >= 0 ? '+' : ''}${returnRate.toFixed(2)}%)`;
+        returnRateEl.style.color = returnRate >= 0 ? "#d9534f" : "#0275d8"; // 양수 빨강, 음수 파랑
+      } else {
+        returnRateEl.innerText = `(0.00%)`;
+        returnRateEl.style.color = "#888";
       }
     }
 
-    // 페이지 로드 시 자동으로 1회 현재가 조회
+    // ----------------------------------------------------
+    // 페이지 로드 시 1초 자동 갱신 시작
+    // ----------------------------------------------------
     window.addEventListener("DOMContentLoaded", () => {
-      fetchPrice(false);
+      // 1. 즉시 1회 조회
+      fetchPrice();
+
+      // 2. 1초(1000ms) 간격으로 무한 자동 실행
+      timerId = setInterval(fetchPrice, REFRESH_INTERVAL);
     });
   </script>
 </body>
